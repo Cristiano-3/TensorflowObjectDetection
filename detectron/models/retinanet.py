@@ -70,5 +70,11 @@ class RetinaNet():
         pass
 
     def train_one_epoch(self):
-        global_step, cls_loss, reg_loss, total_loss \
-            = self.sess.run()
+        sess.run(self.train_initializer)
+        while True:
+            try:
+                global_step, cls_loss, reg_loss, total_loss \
+                = self.sess.run(train_op)
+            except tf.errors.OutOfRangeError:
+                break
+            
