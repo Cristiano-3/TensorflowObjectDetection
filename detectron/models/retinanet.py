@@ -15,9 +15,11 @@ class RetinaNet():
         self.mode = mode
 
         if mode == 'train':
+            self.is_training = True
             self.train_generator = trainset['train_generator']
             self.train_initializer, self.train_iterator = self.train_generator
-            
+        else:
+            self.is_training = False
 
         # build network architecture
         self._define_inputs()

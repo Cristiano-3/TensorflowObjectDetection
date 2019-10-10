@@ -5,3 +5,5 @@ lr = 1e-2
 
 # ------- data pre-processing cfgs -------
 data_format = 'channel_first'
+pi = 0.01
+
