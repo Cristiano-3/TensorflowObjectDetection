@@ -2,7 +2,8 @@
 import tensorflow as tf
 import numpy as np
 from configs import cfgs
-from utils.common import *
+from nets.resnet_v1_50 import ResNet
+from utils import common
 
 
 class RetinaNet():
@@ -69,7 +70,50 @@ class RetinaNet():
 
 
     def _build_detection_architecture(self):
-        pass
+        with tf.variable_scope('feature_pyramid'):
+            # backbone
+            resnet = ResNet(self.images, is_training=self.is_training)
+            feat1, feat2, feat3 = resnet.endpoints[-3:]
+            p5 = self._get_pyramid(feat3, 256)
+            p4, top_down = self._get_pyramid(feat2, 256, p5)
+            p3, _ = self._get_pyramid(feat1, 256, top_down)  # biggest resolution
+            p6 = common.bn_activation_conv(p5, 256, 3, 2)
+            p7 = common.bn_activation_conv(p6, 256, 3, 2)
+
+        with tf.variable_scope('subnets')
+            # cls and reg subnets
+            p3_cls = self._classification_subnet(p3, 256)
+            p3_reg = self._regression_subnet(p3, 256)
+            p4_cls = self._classification_subnet(p3, 256)
+            p4_reg = self._regression_subnet(p3, 256)
+            p5_cls = self._classification_subnet(p3, 256)
+            p5_reg = self._regression_subnet(p3, 256)
+            p6_cls = self._classification_subnet(p3, 256)
+            p6_reg = self._regression_subnet(p3, 256)
+            p7_cls = self._classification_subnet(p3, 256)
+            p7_reg = self._regression_subnet(p3, 256)
+
+            # if NCHW
+            if cfgs.data_format == 'channels_first':
+                p3_cls = tf.transpose(p3_cls, [0, 2, 3, 1])
+                p3_reg = tf.transpose(p3_reg, [0, 2, 3, 1])
+                p4_cls = tf.transpose(p4_cls, [0, 2, 3, 1])
+                p4_reg = tf.transpose(p4_reg, [0, 2, 3, 1])
+                p5_cls = tf.transpose(p5_cls, [0, 2, 3, 1])
+                p5_reg = tf.transpose(p5_reg, [0, 2, 3, 1])
+                p6_cls = tf.transpose(p6_cls, [0, 2, 3, 1])
+                p6_reg = tf.transpose(p6_reg, [0, 2, 3, 1])
+                p7_cls = tf.transpose(p7_cls, [0, 2, 3, 1])
+                p7_reg = tf.transpose(p7_reg, [0, 2, 3, 1])
+
+            # get preds' shape
+            p3shape = tf.shape(p3_cls)
+            p4shape = tf.shape(p4_cls)
+            p5shape = tf.shape(p5_cls)
+            p6shape = tf.shape(p6_cls)
+            p7shape = tf.shape(p7_cls)
+
+        with tf.variable_scope(''):
 
     def train_one_epoch(self):
         sess.run(self.train_initializer)
@@ -80,3 +124,39 @@ class RetinaNet():
             except tf.errors.OutOfRangeError:
                 break
             
+    def _classification_subnet(self, featmap, filters):
+        conv1 = common.bn_activation_conv(featmap, filters, 3, 1)
+        conv2 = common.bn_activation_conv(conv1, filters, 3, 1)
+        conv3 = common.bn_activation_conv(conv2, filters, 3, 1)
+        conv4 = common.bn_activation_conv(conv3, filters, 3, 1)
+        pred = common.bn_activation_conv(conv4, cfgs.num_anchors*cfgs.num_classes, 3, 1, pi_init=True)
+        return pred
+
+    def _regression_subnet(self, featmap, filters):
+        conv1 = common.bn_activation_conv(featmap, filters, 3, 1)
+        conv2 = common.bn_activation_conv(conv1, filters, 3, 1)
+        conv3 = common.bn_activation_conv(conv2, filters, 3, 1)
+        conv4 = common.bn_activation_conv(conv3, filters, 3, 1)
+        pred = common.bn_activation_conv(conv4, cfgs.num_anchors*4, 3, 1)
+        return pred
+
+    def _get_pyramid(self, featmap, filters, top_feat=None):
+        if top_feat is None:
+            return common.bn_activation_conv(featmap, filters, 3, 1)
+
+        else:
+            if cfgs.data_format == 'channels_last':
+                feat = common.bn_activation_conv(featmap, filters, 1, 1)
+                top_feat = tf.image.resize_bilinear(top_feat, [tf.shape(feat)[1], tf.shape(feat)[2]])
+                total_feat = feat + top_feat
+
+                return common.bn_activation_conv(total_feat, filters, 3, 1), total_feat
+            else:
+                feat = common.bn_activation_conv(featmap, filters, 1, 1)
+                feat = tf.transpose(feat, [0, 2, 3, 1])  # NCHW->NHWC
+                top_feat = tf.transpose(top_feat, [0, 2, 3, 1])
+                top_feat = tf.image.resize_bilinear(top_feat, [tf.shape(feat)[1], tf.shape(feat)[2]])
+                total_feat = feat + top_feat
+                total_feat = tf.transpose(total_feat, [0, 3, 1, 2])  # NHWC->NCHW
+
+                return common.bn_activation_conv(total_feat, filters, 3, 1), total_feat

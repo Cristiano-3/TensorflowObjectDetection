@@ -2,7 +2,7 @@
 
 import tensorflow as tf
 import math
-from detectron.utils.common import *
+from detectron.utils import common
 from configs import cfgs
 
 
@@ -12,84 +12,87 @@ class ResNet():
         self.inputs = inputs
         self.is_training = is_training
         self.scope = scope
+        
+        self.data_format = cfgs.data_format
+        self.is_bottleneck = cfgs.is_bottleneck
 
         endpoints = []
         # build graph and get endpoints
-        with tf.variable_scope(scope):
-            conv1 = self._conv_bn_actibation(self.inputs, 16, 7, 2)
-            pool1 = self._max_pooling()
+        with tf.variable_scope(self.scope):
+            # 224x224x3 -> 112x112x64
+            with tf.variable_scope('conv1'):
+                conv1 = common.conv_bn_actibation(self.inputs, 64, 7, 2, is_training=self.is_training)
+                # conv1 = tf.layers.conv2d(self.inputs, 64, 7, 2, 'conv1')
+
+            # 112x112x64 -> 56x56x64
+            pool1 = common.max_pooling(conv1, 3, 2, data_format=self.data_format, name='pool1')
+
+            # select residual unit
+            if self.is_bottleneck:
+                residual_unit_fn = self._residual_bottleneck
+            else:
+                residual_unit_fn = self._residual_block
+
+            # block1
+            # 56x56x64
+            residual_block = pool1
+            for i in range(3):
+                residual_block = residual_unit_fn(residual_block, 64, 1, 'block1_unit'+str(i+1))
+            endpoints.append(residual_block)
+                        
+            # block2
+            for i in range(4):
+                if i == 0:
+                    # downsample by strides=2, at first unit
+                    residual_block = residual_unit_fn(residual_block, 128, 2, 'block2_unit1')
+                else:
+                    residual_block = residual_unit_fn(residual_block, 128, 1, 'block2_unit'+str(i+1))
+            endpoints.append(residual_block)
+
+            # block3
+            for i in range(6):
+                if i == 0:
+                    residual_block = residual_unit_fn(residual_block, 256, 2, 'block3_unit1')
+                else:
+                    residual_block = residual_unit_fn(residual_block, 256, 1, 'block3_unit'+str(i+1))
+            endpoints.append(residual_block)
+
+            # block4
+            for i in range(3):
+                if i == 0:
+                    residual_block = residual_unit_fn(residual_block, 512, 2, 'block4_unit1')
+                else:
+                    residual_block = residual_unit_fn(residual_block, 512, 1, 'block4_unit'+str(i+1))
+            endpoints.append(residual_block)
 
         self.endpoints = endpoints
 
-    def _bn(self, inputs):
-        bn = tf.layers.batch_normalization(
-            inputs=inputs,
-            axis=3 if self.data_format == 'channels_last' else 1,
-            training=self.is_training
-        )
-        return bn
-
-    def _conv_bn_actibation(self, inputs, filters, ksize, strides,
-                            activation=tf.nn.relu):
-        conv = tf.layers.conv2d(inputs, filters, ksize, strides,
-                                padding='same',
-                                data_format=self.data_format,
-                                kernel_initializer=tf.variance_scaling_initializer()
-                               )
-        bn = self._bn(conv)
-        if activation is not None:
-            return activation(bn)
-        else:
-            return bn
-
-    def _bn_activation_conv(self, inputs, filters, ksize, strides,
-                            activation=tf.nn.relu, pi_init=False):
-        # bn
-        bn = self._bn(inputs)
-        # activation
-        if activation is not None:
-            bn = activation(bn)
-        # conv
-        if not pi_init:
-            conv = tf.layers.conv2d(bn, filters, ksize, strides,
-                                    padding='same',
-                                    data_format=self.data_format,
-                                    kernel_initializer=tf.variance_scaling_initializer()
-                                    )
-        else:
-            conv = tf.layers.conv2d(bn, filters, ksize, strides,
-                                    padding='same',
-                                    data_format=self.data_format,
-                                    kernel_initializer=tf.variance_scaling_initializer(),
-                                    bias_initializer=tf.constant_initializer(-math.log((1 - self.pi) / self.pi))
-                                    )
-            # kernel initializer:
-            # tf.truncated_normal_initializer(stddev=0.01)
-            # tf.glorot_normal_initializer # xavier
-        return conv
-
     def _residual_block(self, inputs, filters, strides, scope):
         with tf.variable_scope(scope):
+            # residual-branch
             with tf.variable_scope('residual'):
-                conv = self._bn_activation_conv(inputs, filters, 3, strides)  # maybe down sample
-                conv = self._bn_activation_conv(conv, filters, 3, 1)  # no down sample
+                conv = common.bn_activation_conv(inputs, filters, 3, strides, is_training=self.is_training)  # maybe down sample
+                conv = common.bn_activation_conv(conv, filters, 3, 1, is_training=self.is_training)  # no down sample
 
+            # identity-branch
             with tf.variable_scope('identity'):
                 if strides != 1:
-                    shortcut = self._bn_activation_conv(inputs, filters, 3, strides)
+                    shortcut = common.bn_activation_conv(inputs, filters, 3, strides, is_training=self.is_training)
                 else:
-                    shortcut = inputs  # self._bn_activation_conv(inputs, filters, 1, 1)
+                    shortcut = inputs  # common.bn_activation_conv(inputs, filters, 1, 1)
 
         return conv + shortcut
 
     def _residual_bottleneck(self, inputs, filters, strides, scope):
         with tf.variable_scope(scope):
+            # residual-branch
             with tf.variable_scope('residual'):
-                conv = self._bn_activation_conv(inputs, filters, 1, 1)      # ?strides
-                conv = self._bn_activation_conv(conv, filters, 3, strides)  # ?1
-                conv = self._bn_activation_conv(conv, 4*filters, 1, 1)
+                conv = common.bn_activation_conv(inputs, filters, 1, 1, is_training=self.is_training)      # ?strides
+                conv = common.bn_activation_conv(conv, filters, 3, strides, is_training=self.is_training)  # ?1
+                conv = common.bn_activation_conv(conv, 4*filters, 1, 1, is_training=self.is_training)
 
+            # identity-branch
             with tf.variable_scope('identity'):
-                shortcut = self._bn_activation_conv(inputs, 4*filters, 3, strides)  # ? 1, 1
+                shortcut = common.bn_activation_conv(inputs, 4*filters, 3, strides, is_training=self.is_training)  # ? 1, 1
 
             return conv + shortcut
