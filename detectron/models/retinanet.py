@@ -20,6 +20,7 @@ class RetinaNet():
             self.train_generator = trainset['train_generator']
             self.train_initializer, self.train_iterator = self.train_generator
 
+        self.global_step = tf.get_variable(initializer=tf.constant(0), trainable=False, name='global_step')
         # build network architecture
         self._define_inputs()
         self._build_detection_architecture()
@@ -114,11 +115,11 @@ class RetinaNet():
         with tf.variable_scope('inference'):
             # cls & reg -> bbox:  NxHWAx2, NxHWAx2, NxHWAxclass
             # diff H, W for each pyramid-level
-            p3bbox_yx, p3bbox_hw, p3bbox_conf = self._get_pbbox(p3_cls, p3_reg)
-            p4bbox_yx, p4bbox_hw, p4bbox_conf = self._get_pbbox(p4_cls, p4_reg)
-            p5bbox_yx, p5bbox_hw, p5bbox_conf = self._get_pbbox(p5_cls, p5_reg)
-            p6bbox_yx, p6bbox_hw, p6bbox_conf = self._get_pbbox(p6_cls, p6_reg)
-            p7bbox_yx, p7bbox_hw, p7bbox_conf = self._get_pbbox(p7_cls, p7_reg)
+            p3bbox_yx, p3bbox_hw, p3conf = self._get_pbbox(p3_cls, p3_reg)
+            p4bbox_yx, p4bbox_hw, p4conf = self._get_pbbox(p4_cls, p4_reg)
+            p5bbox_yx, p5bbox_hw, p5conf = self._get_pbbox(p5_cls, p5_reg)
+            p6bbox_yx, p6bbox_hw, p6conf = self._get_pbbox(p6_cls, p6_reg)
+            p7bbox_yx, p7bbox_hw, p7conf = self._get_pbbox(p7_cls, p7_reg)
 
             # anchor bbox: HWAx2
             a3bbox_y1x1, a3bbox_y2x2, a3bbox_yx, a3bbox_hw = self._get_abbox(self.anchors[0], p3shape)
@@ -130,7 +131,7 @@ class RetinaNet():
             # merge predictions of all pyramid-level
             pbbox_yx = tf.concat([p3bbox_yx, p4bbox_yx, p5bbox_yx, p6bbox_yx, p7bbox_yx], axis=1)
             pbbox_hw = tf.concat([p3bbox_hw, p4bbox_hw, p5bbox_hw, p6bbox_hw, p7bbox_hw], axis=1)
-            pbbox_conf = tf.concat([p3bbox_conf, p4bbox_conf, p5bbox_conf, p6bbox_conf, p7bbox_conf], axis=1)
+            pconf = tf.concat([p3conf, p4conf, p5conf, p6conf, p7conf], axis=1)
 
             # merge anchors of all pyramid-level
             abbox_y1x1 = tf.concat([a3bbox_y1x1, a4bbox_y1x1, a5bbox_y1x1, a6bbox_y1x1, a7bbox_y1x1], axis=0)
@@ -139,9 +140,10 @@ class RetinaNet():
             abbox_hw = tf.concat([a3bbox_hw, a4bbox_hw, a5bbox_hw, a6bbox_hw, a7bbox_hw], axis=0)
 
             if self.mode == 'train':
-                cond = lambda loss, i: tf.less(i, tf.cast(cfgs.batch_size, tf.float32))
-                body = lambda loss, i: (
-                    tf.add(loss, self._compute_one_image_loss(
+                cond = lambda loss, conf_loss, pos_coord_loss, i: tf.less(i, tf.cast(cfgs.batch_size, tf.float32))
+                body = lambda loss, conf_loss, pos_coord_loss, i: (
+                    tloss, closs, ploss = \
+                    self._compute_one_image_loss(
                         tf.squeeze(tf.gather(pbbox_yx, tf.cast(i, tf.int32))),
                         tf.squeeze(tf.gather(pbbox_hw, tf.cast(i, tf.int32))),
                         abbox_y1x1,
@@ -150,16 +152,25 @@ class RetinaNet():
                         abbox_hw,
                         tf.squeeze(tf.gather(pconf, tf.cast(i, tf.int32))),
                         tf.squeeze(tf.gather(self.ground_truth, tf.cast(i, tf.int32))),
-                    )),
+                    )
+                    tf.add(loss, tloss),
+                    tf.add(conf_loss, closs),
+                    tf.add(pos_coord_loss, ploss),
                     tf.add(i, 1.)
                 )
                 i = 0.
                 loss = 0.
-                init_state = (loss, i)
+                conf_loss = 0. 
+                pos_coord_loss = 0.
+                init_state = (loss, conf_loss, pos_coord_loss, i)                
                 state = tf.while_loop(cond, body, init_state)
                 
-                total_loss, _ = state
-                total_loss = total_loss / cfgs.batch_size
+                #total_loss, _ = state
+                total_loss = state[0] / cfgs.batch_size
+                self.cls_loss = state[1] / cfgs.batch_size
+                self.reg_loss = state[2] / cfgs.batch_size
+
+                # weight regularization loss
                 fpn_l2_loss = tf.add_n([tf.nn.l2_loss(var) for var in tf.trainable_variables('feature_pyramid')])
                 sbn_l2_loss = tf.add_n([tf.nn.l2_loss(var) for var in tf.trainable_variables('subnets')])
                 self.loss = total_loss + cfgs.weight_decay * (fpn_l2_loss + sbn_l2_loss)
@@ -170,6 +181,44 @@ class RetinaNet():
                 self.train_op = tf.group([update_ops, train_op])
             else:
                 # 
+                pbbox_yxt = pbbox_yx[0, ...]
+                pbbox_hwt = pbbox_hw[0, ...]
+                confidence= tf.nn.softmax(pconf[0, ...])
+                class_id = tf.argmax(confidence, axis=-1)
+                conf_mask = tf.less(class_id, cfgs.num_classes - 1)
+
+                pbbox_yxt = tf.boolean_mask(pbbox_yxt, conf_mask)
+                pbbox_hwt = tf.boolean_mask(pbbox_hwt, conf_mask)
+                confidence = tf.boolean_mask(confidence, conf_mask)
+
+                abbox_yxt = tf.boolean_mask(abbox_yx, conf_mask)
+                abbox_hwt = tf.boolean_mask(abbox_hw, conf_mask)
+                
+                dpbbox_yxt = pbbox_yxt * abbox_hwt + abbox_yxt
+                dpbbox_hwt = tf.exp(pbbox_hwt) * abbox_hwt
+                dpbbox_y1x1 = dpbbox_yxt - dpbbox_hwt / 2.
+                dpbbox_y2x2 = dpbbox_yxt + dpbbox_hwt / 2. 
+                dpbbox_y1x1y2x2 = tf.concat([dpbbox_y1x1, dpbbox_y2x2], axis=-1)
+                
+                filter_mask = tf.greater_equal(confidence, cfgs.nms_score_threshold)
+                scores = []
+                class_id = []
+                bbox = []
+                for i in range(cfgs.num_classes - 1):
+                    scoresi = tf.boolean_mask(confidence[:, i], filter_mask[:, i])
+                    bboxi = tf.boolean_mask(dpbbox_y1x1y2x2, filter_mask[:, i])
+                    selected_indices = tf.image.non_max_suppression(
+                        bboxi, scoresi, cfgs.nms_max_boxes, cfgs.nms_iou_threshold, name='nms'
+                    )
+
+                    scores.append(tf.gather(scoresi, selected_indices))
+                    bbox.append(tf.gather(bboxi, selected_indices))
+                    class_id.append(tf.ones_like(tf.gather(scoresi, selected_indices)))
+
+                bbox = tf.concat(bbox, axis=0)
+                scores = tf.concat(scores, axis=0)
+                class_id = tf.concat(class_id, axis=0)
+                self.detection_pred = [scores, bbox, class_id]
 
     def _compute_one_image_loss(self, pbbox_yx, pbbox_hw, pconf, 
                                 abbox_y1x1, abbox_y2x2, abbox_yx, abbox_hw, 
@@ -180,10 +229,11 @@ class RetinaNet():
         gbbox_yx = ground_truth[..., 0:2]
         gbbox_hw = ground_truth[..., 2:4]
         class_id = tf.cast(ground_truth[..., 4], dtype=tf.int32)
-        labels = class_id
+        label = class_id
         gbbox_y1x1 = gbbox_yx - gbbox_hw / 2.
         gbbox_y2x2 = gbbox_yx + gbbox_hw / 2. 
 
+        # ti? tile
         abbox_hwti = tf.reshape(abbox_hw, [1, -1, 2])
         abbox_y1x1ti = tf.reshape(abbox_y1x1, [1, -1, 2])
         abbox_y2x2ti = tf.reshape(abbox_y2x2, [1, -1, 2])
@@ -208,8 +258,94 @@ class RetinaNet():
         garea = tf.reduce_prod(gbbox_hwti, axis=-1)
         gaIoU = gaIoU_area / (aarea + garea - gaIoU_area)
 
-        tf.argmax(gaIoU, axis=1)
+        best_raIdx = tf.argmax(gaIoU, axis=1)  # relative anchor index
+        best_pbbox_yx = tf.gather(pbbox_yx, best_raIdx)
+        best_pbbox_hw = tf.gather(pbbox_hw, best_raIdx)
+        best_pconf = tf.gather(pconf, best_raIdx)
+        best_abbox_yx = tf.gather(abbox_yx, best_raIdx)
+        best_abbox_hw = tf.gather(abbox_hw, best_raIdx)
+
+        bestmask, _ = tf.unique(best_raIdx)
+        bestmask = tf.sort(bestmask)
+        bestmask = tf.reshape(bestmask, [-1, 1])
+        bestmask = tf.SparseTensor(tf.concat([bestmask, tf.zeros_like(bestmask)], axis=-1),
+                                          tf.squeeze(tf.ones_like(bestmask)), dense_shape=[ashape[1], 1])
+        bestmask = tf.reshape(tf.cast(tf.sparse.to_dense(bestmask), tf.float32), [-1])
+
+        othermask = 1. - bestmask
+        othermask = othermask > 0. 
+        other_pbbox_yx = tf.boolean_mask(pbbox_yx, othermask)
+        other_pbbox_hw = tf.boolean_mask(pbbox_hw, othermask)
+        other_pconf = tf.boolean_mask(pconf, othermask)
+
+        other_abbox_yx = tf.boolean_mask(abbox_yx, othermask)
+        other_abbox_hw = tf.boolean_mask(abbox_hw, othermask)
+
+        agIoU = tf.transpose(gaIoU)
+        other_agIoU = tf.boolean_mask(agIoU,agIoU,other_mask )
+        best_agIoU  = tf.reduce_max(other_agIoU, axis=1)
+        pos_agIoU_mask = best_agIoU > 0.5
+        neg_agIoU_mask = best_agIoU < 0.4
+        rgIdx = tf.argmax(other_agIoU, axis=1)
+        pos_rgIdx = tf.boolean_mask(rgIdx, pos_agIoU_mask)
+        pos_pbbox_yx = tf.boolean_mask(other_pbbox_yx, pos_agIoU_mask)
+        pos_pbbox_hw = tf.boolean_mask(other_pbbox_hw, pos_agIoU_mask)
+        pos_pconf = tf.boolean_mask(other_pconf, pos_agIoU_mask)
         
+        pos_abbox_yx = tf.boolean_mask(other_abbox_yx, pos_agIoU_mask)
+        pos_abbox_hw = tf.boolean_mask(other_abbox_hw, pos_agIoU_mask)
+
+        pos_label = tf.gather(label, pos_rgIdx)
+        pos_gbbox_yx = tf.gather(gbbox_yx, pos_rgIdx)
+        pos_gbbox_hw = tf.gather(gbbox_hw, pos_rgIdx)
+
+        neg_pconf = tf.boolean_mask(other_pconf, neg_agIoU_mask)
+        neg_shape = tf.shape(neg_pconf)
+        num_neg = neg_shape[0]
+        neg_class_id = tf.constant([cfgs.num_classes-1])
+        neg_label = tf.tile(neg_class_id, [num_neg])
+
+        pos_pbbox_yx = tf.concat([best_pbbox_yx, pos_pbbox_yx], axis=0)
+        pos_pbbox_hw = tf.concat([best_pbbox_hw, pos_pbbox_hw], axis=0)
+        pos_pconf = tf.concat([best_pconf, pos_pconf], axis=0)
+        pos_label = tf.concat([label, pos_label], axis=0)
+        pos_gbbox_yx = tf.concat([gbbox_yx, pos_gbbox_yx], axis=0)
+        pos_gbbox_hw = tf.concat([gbbox_hw, pos_gbbox_hw], axis=0)
+        pos_abbox_yx = tf.concat([best_abbox_yx, pos_abbox_yx], axis=0)
+        pos_abbox_hw = tf.concat([best_abbox_hw, pos_abbox_hw], axis=0)
+        conf_loss = self._focal_loss(pos_label, pos_pconf, neg_label, neg_pconf)
+
+        pos_truth_pbbox_yx = (pos_gbbox_yx - pos_abbox_yx) / pos_abbox_hw
+        pos_truth_pbbox_hw = tf.log(pos_gbbox_hw / pos_abbox_hw)
+        pos_yx_loss = tf.reduce_sum(self._smooth_l1_loss(pos_pbbox_yx - pos_truth_pbbox_yx), axis=-1)
+        pos_hw_loss = tf.reduce_sum(self._smooth_l1_loss(pos_pbbox_hw - pos_truth_pbbox_hw), axis=-1)
+        pos_coord_loss = tf.reduce_mean(pos_yx_loss + pos_hw_loss)
+
+        total_loss = conf_loss + pos_coord_loss
+        return total_loss, conf_loss, pos_coord_loss
+
+    def _smooth_l1_loss(self, x):
+        return tf.where(tf.abs(x) < 1., 0.5*x*x, tf.abs(x)-0.5)
+
+    def _focal_loss(self, poslabel, posprob, neglabel, negprob):
+        posprob = tf.nn.softmax(posprob)
+        negprob = tf.nn.softmax(negprob)
+        pos_index = tf.concat([
+            tf.expand_dims(tf.range(0, tf.shape(posprob)[0], dtype=tf.int32), axis=-1),
+            tf.reshape(poslabel, [-1, 1])
+        ], axis=-1)
+        neg_index = tf.concat([
+            tf.expand_dims(tf.range(0, tf.shape(negprob)[0], dtype=tf.int32), axis=-1),
+            tf.reshape(neglabel, [-1, 1])
+        ], axis=-1)
+        posprob = tf.clip_by_value(tf.gather_nd(posprob, pos_index), 1e-8, 1.)
+        negprob = tf.clip_by_value(tf.gather_nd(negprob, neg_index), 1e-8, 1.)
+        posloss = - cfgs.alpha * tf.pow(1. - posprob, cfgs.gamma) * tf.log(posprob)
+        negloss = - cfgs.alpha * tf.pow(1. - negprob, cfgs.gamma) * tf.log(negprob)
+        total_loss = tf.concat([posloss, negloss], axis=0)
+        loss = tf.reduce_sum(total_loss) / tf.cast(tf.shape(posloss)[0], tf.float32)
+        return loss
+
     def _get_pbbox(self, predc, predr):
         """
         prediction -> bbox: yx, hw, conf
@@ -267,14 +403,22 @@ class RetinaNet():
         return abbox_y1x1, abbox_y2x2, abbox_yx, abbox_hw
 
     def train_one_epoch(self):
-        sess.run(self.train_initializer)
+        self.is_training = True
+        self.sess.run(self.train_initializer)
+        mean_loss = []
         while True:
             try:
-                global_step, cls_loss, reg_loss, total_loss \
-                = self.sess.run(train_op)
+                _, cls_loss, reg_loss, total_loss, global_step \
+                = self.sess.run([self.train_op, self.cls_loss, self.reg_loss, self.loss, self.global_step])
+                print('steps:{:d}, cls_loss:{:.4f}, reg_loss:{:.4f}, total_loss:{:.4f}'.format(global_step, ))
+                mean_loss.append(loss)
             except tf.errors.OutOfRangeError:
                 break
-            
+
+        sys.stdout.write('\n')
+        mean_loss = np.mean(mean_loss)
+        return mean_loss
+
     def _classification_subnet(self, featmap, filters):
         conv1 = common.bn_activation_conv(featmap, filters, 3, 1)
         conv2 = common.bn_activation_conv(conv1, filters, 3, 1)
