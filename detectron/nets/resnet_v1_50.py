@@ -25,7 +25,7 @@ class ResNet():
                 # conv1 = tf.layers.conv2d(self.inputs, 64, 7, 2, 'conv1')
 
             # 112x112x64 -> 56x56x64
-            pool1 = common.max_pooling(conv1, 3, 2, data_format=self.data_format, name='pool1')
+            pool1 = common.max_pooling(conv1, 3, 2, name='pool1')
 
             # select residual unit
             if self.is_bottleneck:

@@ -4,7 +4,8 @@ import numpy as np
 import os, sys
 from lxml import etree
 import warnings
-from image_augmentor import augment
+from datasets.image_augmentor import augment
+from configs import cfgs
 
 class2id = {
     'VAT_electronic_invoice': 0,
@@ -74,7 +75,7 @@ def xml_to_example(xmlpath, imgpath):
     features = {
         'image': bytes_feature(image),
         'shape': bytes_feature(shape.tobytes()),
-        'gt': bytes_feature(gt.tobytes())
+        'ground_truth': bytes_feature(gt.tobytes())
     }
 
     example = tf.train.Example(features=tf.train.Features(feature=features))
@@ -129,24 +130,24 @@ def parse_fn(data, config):
     features = tf.parse_single_example(data, features={
         'image': tf.FixedLenFeature([], tf.string),
         'shape': tf.FixedLenFeature([], tf.string),
-        'gt': tf.FixedLenFeature([], tf.string)
+        'ground_truth': tf.FixedLenFeature([], tf.string)
     })
 
     shape = tf.decode_raw(features['shape'], tf.int32)
-    gt = tf.decode_raw(features['gt'], tf.float32)
+    gt = tf.decode_raw(features['ground_truth'], tf.float32)
     image = tf.image.decode_jpeg(features['image'], channels=3)
     shape = tf.reshape(shape, [3])
     gt = tf.reshape(gt, [-1, 5])
     image = tf.cast(tf.reshape(image, shape), tf.float32)
     image, gt = augment(image=image,
-                        shape=shape,
-                        gt=gt,
+                        input_shape=shape,
+                        ground_truth=gt,
                         **config)
 
     return image, gt
 
 
-def get_generator(tfrecords, batch_size, buffer_size, config):
+def get_generator(tfrecords):  #, batch_size, buffer_size, config):
     """
     :param tfrecords:
     :param batch_size:
@@ -157,10 +158,11 @@ def get_generator(tfrecords, batch_size, buffer_size, config):
     dataset = tf.data.TFRecordDataset(tfrecords)
 
     # operations to dataset
-    dataset = dataset.map(lambda x: parse_fn(x, config))
-                     .shuffle(buffer_size=buffer_size)
-                     .batch(batch_size, drop_remainder=True)
-                     .repeat()
+    dataset = (dataset.map(lambda x: parse_fn(x, cfgs.augment_config))
+        .shuffle(buffer_size=cfgs.buffer_size)
+        .batch(cfgs.batch_size, drop_remainder=True)
+        .repeat()
+    )
 
     # get iterator of dataset, and corresponding initializer
     iterator = tf.data.Iterator.from_structure(dataset.output_types, dataset.output_shapes)
