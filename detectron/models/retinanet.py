@@ -1,7 +1,7 @@
 # coding: utf-8
 import tensorflow as tf
 import numpy as np
-import os
+import os, sys, time
 
 from configs import cfgs
 from detectron.nets.resnet_v1_50 import ResNet
@@ -424,9 +424,16 @@ class RetinaNet():
         while True:
             try:
                 if step==0 or (step+1) % cfgs.show_inter == 0:
+                    training_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
+
+                    start = time.time()
                     _, cls_loss, reg_loss, total_loss, global_step \
                     = self.sess.run([self.train_op, self.cls_loss, self.reg_loss, self.loss, self.global_step], feed_dict={self.lr: lr})
-                    print('steps:{:d}, cls_loss:{:.4f}, reg_loss:{:.4f}, total_loss:{:.4f}'.format(global_step, cls_loss, reg_loss, total_loss))
+                    end = time.time()
+
+                    print('{}: step {:d}, cls_loss:{:.4f}, reg_loss:{:.4f}, total_loss:{:.4f}, per_cost_time:{:.4f}s' \
+                        .format(training_time, global_step, cls_loss, reg_loss, total_loss, (end - start)))
+
                 else:
                     _, global_step = self.sess.run([self.train_op, self.global_step], feed_dict={self.lr: lr})
 
