@@ -1,9 +1,13 @@
 # coding: utf-8
 import tensorflow as tf
 import numpy as np
+import os
+
 from configs import cfgs
 from detectron.nets.resnet_v1_50 import ResNet
 from detectron.utils import common
+from detectron.utils.show_box_in_tensor import draw_boxes_with_categories
+from detectron.utils.show_box_in_tensor import draw_boxes_with_categories_and_scores
 
 
 class RetinaNet():
@@ -27,6 +31,9 @@ class RetinaNet():
 
         #
         self._init_session()
+        self._create_saver()
+        self._create_summary_writer(cfgs.summary_path)
+        self._create_summary()
 
     def _init_session(self):
         self.sess = tf.Session()
@@ -179,13 +186,14 @@ class RetinaNet():
                 # weight regularization loss
                 fpn_l2_loss = tf.add_n([tf.nn.l2_loss(var) for var in tf.trainable_variables('feature_pyramid')])
                 sbn_l2_loss = tf.add_n([tf.nn.l2_loss(var) for var in tf.trainable_variables('subnets')])
-                self.loss = total_loss + cfgs.weight_decay * (fpn_l2_loss + sbn_l2_loss)
+                self.weight_decay_loss = cfgs.weight_decay * (fpn_l2_loss + sbn_l2_loss)
+                self.loss = total_loss + self.weight_decay_loss
 
                 optimizer = tf.train.MomentumOptimizer(learning_rate=self.lr, momentum=.9)
                 train_op = optimizer.minimize(self.loss, global_step=self.global_step)
                 update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
                 self.train_op = tf.group([update_ops, train_op])
-            else:
+            #else:
                 # 
                 pbbox_yxt = pbbox_yx[0, ...]
                 pbbox_hwt = pbbox_hw[0, ...]
@@ -412,12 +420,27 @@ class RetinaNet():
         self.is_training = True
         self.sess.run(self.train_initializer)
         mean_loss = []
+        step = 0
         while True:
             try:
-                _, cls_loss, reg_loss, total_loss, global_step \
-                = self.sess.run([self.train_op, self.cls_loss, self.reg_loss, self.loss, self.global_step], feed_dict={self.lr: lr})
-                print('steps:{:d}, cls_loss:{:.4f}, reg_loss:{:.4f}, total_loss:{:.4f}'.format(global_step, cls_loss, reg_loss, total_loss))
+                if step==0 or (step+1) % cfgs.show_inter == 0:
+                    _, cls_loss, reg_loss, total_loss, global_step \
+                    = self.sess.run([self.train_op, self.cls_loss, self.reg_loss, self.loss, self.global_step], feed_dict={self.lr: lr})
+                    print('steps:{:d}, cls_loss:{:.4f}, reg_loss:{:.4f}, total_loss:{:.4f}'.format(global_step, cls_loss, reg_loss, total_loss))
+                else:
+                    _, global_step = self.sess.run([self.train_op, self.global_step], feed_dict={self.lr: lr})
+
+                if global_step%cfgs.save_inter == 0:
+                    self._save_weight(cfgs.checkpoint_path)
+
+                if global_step%cfgs.sumr_inter == 0:
+                    summary_str = self.sess.run(self.summary_op)
+                    self.summary_writer.add_summary(summary_str, global_step=global_step)
+                    self.summary_writer.flush()
+
+                step += 1
                 mean_loss.append(total_loss)
+
             except tf.errors.OutOfRangeError:
                 break
 
@@ -461,3 +484,38 @@ class RetinaNet():
                 total_feat = tf.transpose(total_feat, [0, 3, 1, 2])  # NHWC->NCHW
 
                 return common.bn_activation_conv(total_feat, filters, 3, 1), total_feat
+
+    def _create_saver(self):
+        self.saver = tf.train.Saver(max_to_keep=5)
+
+    def _save_weight(self, path):
+        if not tf.gfile.Exists(os.path.dirname(path)):
+            tf.gfile.MakeDirs(os.path.dirname(path))
+            print(os.path.dirname(path), 'does not exist, create it done!')
+
+        self.saver.save(self.sess, path, global_step=self.global_step)
+        print('save model in:', path)
+
+    def _create_summary_writer(self, summary_path):
+        self.summary_writer = tf.summary.FileWriter(summary_path, graph=self.sess.graph)
+
+    def _create_summary(self):
+        with tf.variable_scope('RETINA_LOSS'):
+            tf.summary.scalar('cls_loss', self.cls_loss)
+            tf.summary.scalar('reg_loss', self.reg_loss)
+
+        with tf.variable_scope('LOSS'):
+            tf.summary.scalar('weight_decay_loss', self.weight_decay_loss)
+            tf.summary.scalar('total_loss', self.loss)
+
+        img_gt = draw_boxes_with_categories(self.images, 
+                                            boxes=self.ground_truth[0, :, :-1],
+                                            labels=self.ground_truth[0, :, -1])
+        img_det = draw_boxes_with_categories_and_scores(self.images, 
+                                                        boxes=self.detection_pred[1],
+                                                        labels=self.detection_pred[2],
+                                                        scores=self.detection_pred[0])
+
+        tf.summary.image('DETECT_CMP/final_detection', img_det)
+        tf.summary.image('DETECT_CMP/ground_truth', img_gt)
+        self.summary_op = tf.summary.merge_all()

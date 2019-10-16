@@ -1,4 +1,9 @@
 # coding: utf-8
+import os
+
+root_path = os.path.abspath('../')
+summary_path = root_path + '/output/summaries'
+checkpoint_path = root_path + '/output/checkpoints/retina'
 
 epochs = 100
 lr = 1e-2
@@ -33,3 +38,7 @@ augment_config = {
     'rotate': [0.5, -5., -5.],
     'pad_truth_to': 60,
 }
+
+show_inter = 20
+sumr_inter = 200
+save_inter = 5000

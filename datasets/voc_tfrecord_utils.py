@@ -161,7 +161,7 @@ def get_generator(tfrecords):  #, batch_size, buffer_size, config):
     dataset = (dataset.map(lambda x: parse_fn(x, cfgs.augment_config))
         .shuffle(buffer_size=cfgs.buffer_size)
         .batch(cfgs.batch_size, drop_remainder=True)
-        .repeat()
+        #.repeat()
     )
 
     # get iterator of dataset, and corresponding initializer
