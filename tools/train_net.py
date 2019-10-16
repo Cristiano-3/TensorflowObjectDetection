@@ -25,7 +25,7 @@ def train(epochs, lr):
         print("-"*25, "epoch", i, "-"*25)
 
         # reduce learning rate
-        if i % 20 == 0:
+        if i % 10 == 0:
             lr /= 10.0
             print("reduce lr, lr=", lr)
 
