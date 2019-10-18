@@ -63,7 +63,11 @@ def draw_a_rectangel_in_img(draw_obj, box, color, width):
     :return:
     '''
     # x1, y1, x2, y2 = box[0], box[1], box[2], box[3]
-    x1, y1, x2, y2 = box[2], box[0], box[3], box[1]
+    # x1, y1, x2, y2 = box[2], box[0], box[3], box[1]
+    x1 = int(box[1] - box[3]/2)
+    y1 = int(box[0] - box[2]/2)
+    x2 = int(box[1] + box[3]/2)
+    y2 = int(box[0] + box[2]/2)
     top_left, top_right = (x1, y1), (x2, y1)
     bottom_left, bottom_right = (x1, y2), (x2, y2)
 
@@ -84,7 +88,8 @@ def draw_a_rectangel_in_img(draw_obj, box, color, width):
 def only_draw_scores(draw_obj, box, score, color):
 
     # x, y = box[0], box[1]
-    x, y = box[2], box[0]
+    # x, y = box[2], box[0]
+    x, y = int(box[1] - box[3]/2), int(box[0] - box[2]/2)
     draw_obj.rectangle(xy=[x, y, x+60, y+10],
                        fill=color)
     draw_obj.text(xy=(x, y),
@@ -94,12 +99,13 @@ def only_draw_scores(draw_obj, box, score, color):
 
 
 def draw_label_with_scores(draw_obj, box, label, score, color):
-    # x, y = box[0], box[1]
-    x, y = box[2], box[0]
-    draw_obj.rectangle(xy=[x, y, x + 60, y + 10],
-                       fill=color)
-
     txt = LABEL_NAME_MAP[label] + ':' + str(round(score, 2))
+
+    # x, y = box[0], box[1]
+    # x, y = box[2], box[0]
+    x, y = int(box[1] - box[3]/2), int(box[0] - box[2]/2)
+    draw_obj.rectangle(xy=[x, y, x + 6*len(txt), y + 10],
+                       fill=color)
     draw_obj.text(xy=(x, y),
                   text=txt,
                   fill='black',
@@ -131,8 +137,8 @@ def draw_boxes_with_label_and_scores(img_array, boxes, labels, scores, in_graph=
             if a_label == ONLY_DRAW_BOXES:  # -1
                 continue
             elif a_label == ONLY_DRAW_BOXES_WITH_SCORES:  # -2
-                 only_draw_scores(draw_obj, box, a_score, color='purple')  # 'White'
-                 continue
+                only_draw_scores(draw_obj, box, a_score, color='purple')  # 'White'
+                continue
             else:
                 draw_label_with_scores(draw_obj, box, a_label, a_score, color='purple')  # 'White'
 
