@@ -46,7 +46,6 @@ class RetinaNet():
             if self.train_initializer is not None:
                 self.sess.run(self.train_initializer)
         
-
     def _define_inputs(self):
         """
         shape/keep_aspect_ratio_resizer or fixed_shape_resizer
@@ -54,6 +53,7 @@ class RetinaNet():
         """
         shape = [cfgs.batch_size, None, None, 3]
 
+        # PIX_MEAN
         mean = tf.convert_to_tensor([123.68, 116.779, 103.979], dtype=tf.float32)
         if cfgs.data_format == 'channels_last':
             mean = tf.reshape(mean, [1, 1, 1, 3])
@@ -90,14 +90,14 @@ class RetinaNet():
             # cls and reg subnets: NxHxWxAxclass, NxHxWxAx4
             p3_cls = self._classification_subnet(p3, 256)
             p3_reg = self._regression_subnet(p3, 256)
-            p4_cls = self._classification_subnet(p3, 256)
-            p4_reg = self._regression_subnet(p3, 256)
-            p5_cls = self._classification_subnet(p3, 256)
-            p5_reg = self._regression_subnet(p3, 256)
-            p6_cls = self._classification_subnet(p3, 256)
-            p6_reg = self._regression_subnet(p3, 256)
-            p7_cls = self._classification_subnet(p3, 256)
-            p7_reg = self._regression_subnet(p3, 256)
+            p4_cls = self._classification_subnet(p4, 256)
+            p4_reg = self._regression_subnet(p4, 256)
+            p5_cls = self._classification_subnet(p5, 256)
+            p5_reg = self._regression_subnet(p5, 256)
+            p6_cls = self._classification_subnet(p6, 256)
+            p6_reg = self._regression_subnet(p6, 256)
+            p7_cls = self._classification_subnet(p7, 256)
+            p7_reg = self._regression_subnet(p7, 256)
 
             # if NCHW transpose to NHWC
             if cfgs.data_format == 'channels_first':
@@ -397,7 +397,7 @@ class RetinaNet():
         tl_x = tf.tile(tl_x, [pshape[1], 1, 1, 1]) * downsampling_rate
         tl_yx = tf.concat([tl_y, tl_x], -1)
 
-        # repeat for all anchors: HxWxAx1
+        # repeat for all anchors: HxWxAx2
         tl_yx = tf.tile(tl_yx, [1, 1, cfgs.num_anchors, 1])
 
         # get all shapes for each anchor
@@ -409,7 +409,7 @@ class RetinaNet():
         priors = tf.convert_to_tensor(priors, tf.float32)
         priors = tf.reshape(priors, [1, 1, -1, 2])  # 1x1xAx2
 
-        # HxWxAx1 - 1x1xAx2 -> HxWxAx2 -> HWAx2
+        # HxWxAx2 - 1x1xAx2 -> HxWxAx2 -> HWAx2
         abbox_y1x1 = tf.reshape(tl_yx - priors / 2., [-1, 2])
         abbox_y2x2 = tf.reshape(tl_yx + priors / 2., [-1, 2])
         abbox_yx = (abbox_y1x1 + abbox_y2x2) / 2.
@@ -423,24 +423,31 @@ class RetinaNet():
         step = 0
         while True:
             try:
+                # train
                 if step==0 or (step+1) % cfgs.show_inter == 0:
-                    training_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
-
                     start = time.time()
+
+                    # train a step
                     _, cls_loss, reg_loss, total_loss, global_step \
                     = self.sess.run([self.train_op, self.cls_loss, self.reg_loss, self.loss, self.global_step], feed_dict={self.lr: lr})
+                    
                     end = time.time()
 
+                    # show infos
+                    training_time = time.strftime('%Y-%M-%D %H:%M:%S', time.localtime(time.time()))
                     print('{}: step {:d}, cls_loss:{:.4f}, reg_loss:{:.4f}, total_loss:{:.4f}, per_cost_time:{:.4f}s' \
                         .format(training_time, global_step, cls_loss, reg_loss, total_loss, (end - start)))
 
                 else:
+                    # train a step
                     _, global_step = self.sess.run([self.train_op, self.global_step], feed_dict={self.lr: lr})
 
-                if global_step%cfgs.save_inter == 0:
+                # save
+                if global_step % cfgs.save_inter == 0:
                     self._save_weight(cfgs.checkpoint_path)
 
-                if global_step%cfgs.sumr_inter == 0:
+                # summary
+                if global_step % cfgs.sumr_inter == 0:
                     summary_str = self.sess.run(self.summary_op)
                     self.summary_writer.add_summary(summary_str, global_step=global_step)
                     self.summary_writer.flush()
@@ -449,6 +456,7 @@ class RetinaNet():
                 mean_loss.append(total_loss)
 
             except tf.errors.OutOfRangeError:
+                print('Finish one epoch!')
                 break
 
         sys.stdout.write('\n')
@@ -477,16 +485,24 @@ class RetinaNet():
 
         else:
             if cfgs.data_format == 'channels_last':
+                # squeeze channel to size 'filters'
                 feat = common.bn_activation_conv(featmap, filters, 1, 1)
+
+                # resize top feat
                 top_feat = tf.image.resize_bilinear(top_feat, [tf.shape(feat)[1], tf.shape(feat)[2]])
+
+                # add 
                 total_feat = feat + top_feat
 
+                # get final pyra use total feat, and pass total feat to next
                 return common.bn_activation_conv(total_feat, filters, 3, 1), total_feat
             else:
                 feat = common.bn_activation_conv(featmap, filters, 1, 1)
                 feat = tf.transpose(feat, [0, 2, 3, 1])  # NCHW->NHWC
+
                 top_feat = tf.transpose(top_feat, [0, 2, 3, 1])
                 top_feat = tf.image.resize_bilinear(top_feat, [tf.shape(feat)[1], tf.shape(feat)[2]])
+
                 total_feat = feat + top_feat
                 total_feat = tf.transpose(total_feat, [0, 3, 1, 2])  # NHWC->NCHW
 
@@ -515,10 +531,10 @@ class RetinaNet():
             tf.summary.scalar('weight_decay_loss', self.weight_decay_loss)
             tf.summary.scalar('total_loss', self.loss)
 
-        img_gt = draw_boxes_with_categories(self.images, 
+        img_gt = draw_boxes_with_categories(self.images[0:1,...], 
                                             boxes=self.ground_truth[0, :, :-1],
                                             labels=self.ground_truth[0, :, -1])
-        img_det = draw_boxes_with_categories_and_scores(self.images, 
+        img_det = draw_boxes_with_categories_and_scores(self.images[0:1,...], 
                                                         boxes=self.detection_pred[1],
                                                         labels=self.detection_pred[2],
                                                         scores=self.detection_pred[0])

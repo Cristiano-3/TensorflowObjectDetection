@@ -12,7 +12,14 @@ def train(epochs, lr):
     data = [
         '../../Object-Detection-API-Tensorflow/data/train_00001-of-00010.tfrecord',
         '../../Object-Detection-API-Tensorflow/data/train_00002-of-00010.tfrecord',
-        '../../Object-Detection-API-Tensorflow/data/train_00003-of-00010.tfrecord'
+        '../../Object-Detection-API-Tensorflow/data/train_00003-of-00010.tfrecord',
+        '../../Object-Detection-API-Tensorflow/data/train_00004-of-00010.tfrecord',
+        '../../Object-Detection-API-Tensorflow/data/train_00005-of-00010.tfrecord',
+        '../../Object-Detection-API-Tensorflow/data/train_00006-of-00010.tfrecord',
+        '../../Object-Detection-API-Tensorflow/data/train_00007-of-00010.tfrecord',
+        '../../Object-Detection-API-Tensorflow/data/train_00008-of-00010.tfrecord',
+        '../../Object-Detection-API-Tensorflow/data/train_00009-of-00010.tfrecord',
+        '../../Object-Detection-API-Tensorflow/data/train_00010-of-00010.tfrecord'
         ]
 
     trainset = get_generator(data)
@@ -25,7 +32,7 @@ def train(epochs, lr):
         print("-"*25, "epoch", i, "-"*25)
 
         # reduce learning rate
-        if i % 10 == 0:
+        if i % 20 == 0:
             lr /= 10.0
             print("reduce lr, lr=", lr)
 

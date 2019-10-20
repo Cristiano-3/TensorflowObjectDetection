@@ -341,7 +341,7 @@ def augment(image, input_shape, data_format, output_shape, zoom_size=None,
                 # original gt, without padding
                 ground_truth = tf.concat([yy, xx, hh, ww, class_id], axis=-1)
 
-            return image_copy, ground_truth
+            return image_copy, ground_truth  # original image and label(ycenter, xcenter, h, w)
         else:
             if pad_truth_to is not None:
                 # pad final ground truth

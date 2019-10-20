@@ -131,16 +131,16 @@ def draw_boxes_with_label_and_scores(img_array, boxes, labels, scores, in_graph=
     num_of_objs = 0
     for box, a_label, a_score in zip(boxes, labels, scores):
 
-        if a_label != NOT_DRAW_BOXES:
+        # if a_label != NOT_DRAW_BOXES:  # 0
+        if a_label == ONLY_DRAW_BOXES:  # -1
+            continue
+        elif a_label == ONLY_DRAW_BOXES_WITH_SCORES:  # -2
+            only_draw_scores(draw_obj, box, a_score, color='purple')  # 'White'
+            continue
+        else:
             num_of_objs += 1
             draw_a_rectangel_in_img(draw_obj, box, color='red', width=3)#STANDARD_COLORS[a_label]
-            if a_label == ONLY_DRAW_BOXES:  # -1
-                continue
-            elif a_label == ONLY_DRAW_BOXES_WITH_SCORES:  # -2
-                only_draw_scores(draw_obj, box, a_score, color='purple')  # 'White'
-                continue
-            else:
-                draw_label_with_scores(draw_obj, box, a_label, a_score, color='purple')  # 'White'
+            draw_label_with_scores(draw_obj, box, a_label, a_score, color='purple')  # 'White'
 
     out_img_obj = Image.blend(raw_img_obj, img_obj, alpha=0.7)
 

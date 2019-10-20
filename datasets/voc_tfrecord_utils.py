@@ -139,6 +139,8 @@ def parse_fn(data, config):
     shape = tf.reshape(shape, [3])
     gt = tf.reshape(gt, [-1, 5])
     image = tf.cast(tf.reshape(image, shape), tf.float32)
+
+    # image: HxWxC, gt: num_boxes x 5
     image, gt = augment(image=image,
                         input_shape=shape,
                         ground_truth=gt,
