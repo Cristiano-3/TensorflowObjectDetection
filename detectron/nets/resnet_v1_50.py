@@ -33,37 +33,45 @@ class ResNet():
             else:
                 residual_unit_fn = self._residual_block
 
-            # block1
-            # 56x56x64
-            residual_block = pool1
-            for i in range(3):
-                residual_block = residual_unit_fn(residual_block, 64, 1, 'block1_unit'+str(i+1))
-            endpoints.append(residual_block)
-                        
-            # block2
-            for i in range(4):
-                if i == 0:
-                    # downsample by strides=2, at first unit
-                    residual_block = residual_unit_fn(residual_block, 128, 2, 'block2_unit1')
-                else:
-                    residual_block = residual_unit_fn(residual_block, 128, 1, 'block2_unit'+str(i+1))
-            endpoints.append(residual_block)
+            with tf.variable_scope('block1'):
+                # block1
+                # 56x56x64
+                residual_block = pool1
+                for i in range(3):
+                    residual_block = residual_unit_fn(residual_block, 64, 1, 'block1_unit'+str(i+1))
 
-            # block3
-            for i in range(6):
-                if i == 0:
-                    residual_block = residual_unit_fn(residual_block, 256, 2, 'block3_unit1')
-                else:
-                    residual_block = residual_unit_fn(residual_block, 256, 1, 'block3_unit'+str(i+1))
-            endpoints.append(residual_block)
+                endpoints.append(residual_block)
 
-            # block4
-            for i in range(3):
-                if i == 0:
-                    residual_block = residual_unit_fn(residual_block, 512, 2, 'block4_unit1')
-                else:
-                    residual_block = residual_unit_fn(residual_block, 512, 1, 'block4_unit'+str(i+1))
-            endpoints.append(residual_block)
+            with tf.variable_scope('block2'):
+                # block2
+                for i in range(4):
+                    if i == 0:
+                        # downsample by strides=2, at first unit
+                        residual_block = residual_unit_fn(residual_block, 128, 2, 'block2_unit1')
+                    else:
+                        residual_block = residual_unit_fn(residual_block, 128, 1, 'block2_unit'+str(i+1))
+
+                endpoints.append(residual_block)
+
+            with tf.variable_scope('block3'):
+                # block3
+                for i in range(6):
+                    if i == 0:
+                        residual_block = residual_unit_fn(residual_block, 256, 2, 'block3_unit1')
+                    else:
+                        residual_block = residual_unit_fn(residual_block, 256, 1, 'block3_unit'+str(i+1))
+
+                endpoints.append(residual_block)
+
+            with tf.variable_scope('block4'):
+                # block4
+                for i in range(3):
+                    if i == 0:
+                        residual_block = residual_unit_fn(residual_block, 512, 2, 'block4_unit1')
+                    else:
+                        residual_block = residual_unit_fn(residual_block, 512, 1, 'block4_unit'+str(i+1))
+
+                endpoints.append(residual_block)
 
         self.endpoints = endpoints
 
