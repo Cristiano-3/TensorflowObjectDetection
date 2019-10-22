@@ -203,7 +203,7 @@ class RetinaNet():
 
                 pbbox_yxt = tf.boolean_mask(pbbox_yxt, conf_mask)
                 pbbox_hwt = tf.boolean_mask(pbbox_hwt, conf_mask)
-                confidence = tf.boolean_mask(confidence, conf_mask)
+                confidence = tf.boolean_mask(confidence, conf_mask)[:, :cfgs.num_classes - 1]
 
                 abbox_yxt = tf.boolean_mask(abbox_yx, conf_mask)
                 abbox_hwt = tf.boolean_mask(abbox_hw, conf_mask)
@@ -227,12 +227,19 @@ class RetinaNet():
 
                     scores.append(tf.gather(scoresi, selected_indices))
                     bbox.append(tf.gather(bboxi, selected_indices))
-                    class_id.append(tf.ones_like(tf.gather(scoresi, selected_indices)))
+                    class_id.append(tf.ones_like(tf.gather(scoresi, selected_indices), tf.int32) * i)
 
                 bbox = tf.concat(bbox, axis=0)
                 scores = tf.concat(scores, axis=0)
                 class_id = tf.concat(class_id, axis=0)
-                self.detection_pred = [scores, bbox, class_id]
+
+                bbox_y1x1 = bbox[:, :2]
+                bbox_y2x2 = bbox[:, 2:]
+                bbox_yx = (bbox_y2x2 + bbox_y1x1) / 2.
+                bbox_hw = bbox_y2x2 - bbox_y1x1
+                bbox_final = tf.concat([bbox_yx, bbox_hw], axis=-1)
+                
+                self.detection_pred = [scores, bbox_final, class_id]
 
     def _compute_one_image_loss(self, pbbox_yx, pbbox_hw, pconf, 
                                 abbox_y1x1, abbox_y2x2, abbox_yx, abbox_hw, 
@@ -435,7 +442,7 @@ class RetinaNet():
 
                     # show infos
                     training_time = time.strftime('%Y-%M-%D %H:%M:%S', time.localtime(time.time()))
-                    print('{}: step {:d}, cls_loss:{:.4f}, reg_loss:{:.4f}, total_loss:{:.4f}, per_cost_time:{:.4f}s' \
+                    print('{} step: {:d}, cls_loss:{:.4f}, reg_loss:{:.4f}, total_loss:{:.4f}, per_cost_time:{:.4f}s' \
                         .format(training_time, global_step, cls_loss, reg_loss, total_loss, (end - start)))
 
                 else:
