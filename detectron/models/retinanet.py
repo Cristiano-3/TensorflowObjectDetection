@@ -17,23 +17,24 @@ class RetinaNet():
         assert cfgs.data_format in ['channels_first', 'channels_last']
 
         # get cfgs
-        self.mode = mode
         self.is_training = (mode == 'train')
 
         if self.is_training:
             # self.train_generator = trainset['train_generator']
             self.train_initializer, self.train_iterator = trainset  # self.train_generator
 
-        self.global_step = tf.get_variable(initializer=tf.constant(0), trainable=False, name='global_step')
         # build network architecture
-        self._define_inputs()
+        self._define_inputs()  # placeholders or tf.Tensors from iterator
         self._build_detection_architecture()
 
-        #
+        # create session & init vars
         self._init_session()
-        self._create_saver()
-        self._create_summary_writer(cfgs.summary_path)
-        self._create_summary()
+
+        # saver & summary
+        if self.is_training:
+            self._create_saver()
+            self._create_summary_writer(cfgs.summary_path)
+            self._create_summary()
 
     def _init_session(self):
         self.sess = tf.Session()
@@ -42,7 +43,7 @@ class RetinaNet():
         self.sess.run(tf.global_variables_initializer())
 
         # init data iterator
-        if self.mode == 'train':
+        if self.is_training:
             if self.train_initializer is not None:
                 self.sess.run(self.train_initializer)
         
@@ -51,7 +52,7 @@ class RetinaNet():
         shape/keep_aspect_ratio_resizer or fixed_shape_resizer
         mean order, where to do minus mean, PIXEL_STD?
         """
-        shape = [cfgs.batch_size, None, None, 3]
+        shape = [None, None, None, 3]
 
         # PIX_MEAN
         mean = tf.convert_to_tensor([123.68, 116.779, 103.979], dtype=tf.float32)
@@ -61,7 +62,7 @@ class RetinaNet():
             mean = tf.reshape(mean, [1, 3, 1, 1])
 
         # train mode
-        if self.mode == 'train':
+        if self.is_training:
             self.images, self.ground_truth = self.train_iterator.get_next()
             self.images.set_shape(shape)
             self.images = self.images - mean
@@ -70,10 +71,7 @@ class RetinaNet():
         else:
             self.images = tf.placeholder(tf.float32, shape, name='images')
             self.images = self.images - mean
-            self.ground_truth = tf.placeholder(tf.float32, [self.batch_size, None, 5], name='labels')
-        
-        self.lr = tf.placeholder(dtype=tf.float32, shape=[], name='lr')
-
+            self.ground_truth = tf.placeholder(tf.float32, [None, None, 5], name='labels')
 
     def _build_detection_architecture(self):
         with tf.variable_scope('feature_pyramid'):
@@ -146,7 +144,7 @@ class RetinaNet():
             abbox_yx = tf.concat([a3bbox_yx, a4bbox_yx, a5bbox_yx, a6bbox_yx, a7bbox_yx], axis=0)
             abbox_hw = tf.concat([a3bbox_hw, a4bbox_hw, a5bbox_hw, a6bbox_hw, a7bbox_hw], axis=0)
 
-            if self.mode == 'train':
+            if self.is_training:
                 cond = lambda loss, conf_loss, pos_coord_loss, i: tf.less(i, tf.cast(cfgs.batch_size, tf.float32))
                 def body(loss, conf_loss, pos_coord_loss, i):
                     losses = self._compute_one_image_loss(
@@ -189,57 +187,77 @@ class RetinaNet():
                 self.weight_decay_loss = cfgs.weight_decay * (fpn_l2_loss + sbn_l2_loss)
                 self.loss = total_loss + self.weight_decay_loss
 
+                self.global_step = tf.get_variable(initializer=tf.constant(0), trainable=False, name='global_step')
+                self.lr = tf.train.exponential_decay(cfgs.lr, self.global_step, 20*cfgs.steps_per_epoch, 0.96, staircase=True, name='learning_rate')
                 optimizer = tf.train.MomentumOptimizer(learning_rate=self.lr, momentum=.9)
                 train_op = optimizer.minimize(self.loss, global_step=self.global_step)
                 update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
                 self.train_op = tf.group([update_ops, train_op])
-            #else:
-                # 
-                pbbox_yxt = pbbox_yx[0, ...]
-                pbbox_hwt = pbbox_hw[0, ...]
-                confidence= tf.nn.softmax(pconf[0, ...])
-                class_id = tf.argmax(confidence, axis=-1)
-                conf_mask = tf.less(class_id, cfgs.num_classes - 1)
+            
+            # delta {pbbox_yx, pbbox_hw, pconf} 
+            # decode with anchor {abbox_yx, abbox_hw}
+            # get boxes {bbox_yx, bbox_hw, id}
+            pbbox_yxt = pbbox_yx[0, ...]
+            pbbox_hwt = pbbox_hw[0, ...]
+            confidence= tf.nn.softmax(pconf[0, ...])
+            class_id = tf.argmax(confidence, axis=-1)
+            conf_mask = tf.less(class_id, cfgs.num_classes - 1)
 
-                pbbox_yxt = tf.boolean_mask(pbbox_yxt, conf_mask)
-                pbbox_hwt = tf.boolean_mask(pbbox_hwt, conf_mask)
-                confidence = tf.boolean_mask(confidence, conf_mask)[:, :cfgs.num_classes - 1]
+            pbbox_yxt = tf.boolean_mask(pbbox_yxt, conf_mask)
+            pbbox_hwt = tf.boolean_mask(pbbox_hwt, conf_mask)
+            confidence = tf.boolean_mask(confidence, conf_mask)[:, :cfgs.num_classes - 1]
 
-                abbox_yxt = tf.boolean_mask(abbox_yx, conf_mask)
-                abbox_hwt = tf.boolean_mask(abbox_hw, conf_mask)
-                
-                dpbbox_yxt = pbbox_yxt * abbox_hwt + abbox_yxt
-                dpbbox_hwt = tf.exp(pbbox_hwt) * abbox_hwt
-                dpbbox_y1x1 = dpbbox_yxt - dpbbox_hwt / 2.
-                dpbbox_y2x2 = dpbbox_yxt + dpbbox_hwt / 2. 
-                dpbbox_y1x1y2x2 = tf.concat([dpbbox_y1x1, dpbbox_y2x2], axis=-1)
-                
-                filter_mask = tf.greater_equal(confidence, cfgs.nms_score_threshold)
-                scores = []
-                class_id = []
-                bbox = []
-                for i in range(cfgs.num_classes - 1):
-                    scoresi = tf.boolean_mask(confidence[:, i], filter_mask[:, i])
-                    bboxi = tf.boolean_mask(dpbbox_y1x1y2x2, filter_mask[:, i])
-                    selected_indices = tf.image.non_max_suppression(
-                        bboxi, scoresi, cfgs.nms_max_boxes, cfgs.nms_iou_threshold, name='nms'
-                    )
+            abbox_yxt = tf.boolean_mask(abbox_yx, conf_mask)
+            abbox_hwt = tf.boolean_mask(abbox_hw, conf_mask)
+            
+            # decode
+            dpbbox_yxt = pbbox_yxt * abbox_hwt + abbox_yxt
+            dpbbox_hwt = tf.exp(pbbox_hwt) * abbox_hwt
+            dpbbox_y1x1 = dpbbox_yxt - dpbbox_hwt / 2.
+            dpbbox_y2x2 = dpbbox_yxt + dpbbox_hwt / 2. 
+            dpbbox_y1x1y2x2 = tf.concat([dpbbox_y1x1, dpbbox_y2x2], axis=-1)
+            
+            # select predictions that conf higher than nms_score_threshold
+            filter_mask = tf.greater_equal(confidence, cfgs.nms_score_threshold)
 
-                    scores.append(tf.gather(scoresi, selected_indices))
-                    bbox.append(tf.gather(bboxi, selected_indices))
-                    class_id.append(tf.ones_like(tf.gather(scoresi, selected_indices), tf.int32) * i)
+            # do nms, get detections
+            scores = []
+            class_id = []
+            bbox = []
+            for i in range(cfgs.num_classes - 1):
+                # filter
+                scoresi = tf.boolean_mask(confidence[:, i], filter_mask[:, i])
+                bboxi = tf.boolean_mask(dpbbox_y1x1y2x2, filter_mask[:, i])
 
-                bbox = tf.concat(bbox, axis=0)
-                scores = tf.concat(scores, axis=0)
-                class_id = tf.concat(class_id, axis=0)
+                # nms
+                selected_indices = tf.image.non_max_suppression(
+                    bboxi, scoresi, cfgs.nms_max_boxes, cfgs.nms_iou_threshold, name='nms'
+                )
 
-                bbox_y1x1 = bbox[:, :2]
-                bbox_y2x2 = bbox[:, 2:]
-                bbox_yx = (bbox_y2x2 + bbox_y1x1) / 2.
-                bbox_hw = bbox_y2x2 - bbox_y1x1
-                bbox_final = tf.concat([bbox_yx, bbox_hw], axis=-1)
-                
-                self.detection_pred = [scores, bbox_final, class_id]
+                scores.append(tf.gather(scoresi, selected_indices))
+                bbox.append(tf.gather(bboxi, selected_indices))
+                class_id.append(tf.ones_like(tf.gather(scoresi, selected_indices), tf.int32) * i)
+
+            bbox = tf.concat(bbox, axis=0)
+            scores = tf.concat(scores, axis=0)
+            class_id = tf.concat(class_id, axis=0)
+
+            # get y1x1, y2x2
+            bbox_y1x1 = bbox[:, :2]
+            bbox_y2x2 = bbox[:, 2:]
+
+            # bounding box clipping
+            input_h = tf.shape(self.images)[1]
+            input_w = tf.shape(self.images)[2]
+            bbox_y1x1_clipped = tf.maximum(tf.minimum(bbox_y1x1, [input_h, input_w]), [0, 0])
+            bbox_y2x2_clipped = tf.maximum(tf.minimum(bbox_y2x2, [input_h, input_w]), [0, 0])
+
+            # compute yx, hw
+            bbox_yx = (bbox_y2x2_clipped + bbox_y1x1_clipped) / 2.
+            bbox_hw = bbox_y2x2_clipped - bbox_y1x1_clipped
+            bbox_final = tf.concat([bbox_yx, bbox_hw], axis=-1)
+            
+            self.detection_pred = [scores, bbox_final, class_id]
 
     def _compute_one_image_loss(self, pbbox_yx, pbbox_hw, pconf, 
                                 abbox_y1x1, abbox_y2x2, abbox_yx, abbox_hw, 
@@ -423,20 +441,22 @@ class RetinaNet():
         abbox_hw = abbox_y2x2 - abbox_y1x1
         return abbox_y1x1, abbox_y2x2, abbox_yx, abbox_hw
 
-    def train_one_epoch(self, lr):
+    def train_one_epoch(self):  # , lr
         self.is_training = True
         self.sess.run(self.train_initializer)
-        mean_loss = []
-        step = 0
+        
         while True:
             try:
+                # get global step
+                global_step = self.sess.run(self.global_step) + 1
+
                 # train
-                if step==0 or (step+1) % cfgs.show_inter == 0:
+                if global_step == 1 or global_step % cfgs.show_inter == 0:
                     start = time.time()
 
                     # train a step
-                    _, cls_loss, reg_loss, total_loss, global_step \
-                    = self.sess.run([self.train_op, self.cls_loss, self.reg_loss, self.loss, self.global_step], feed_dict={self.lr: lr})
+                    _, cls_loss, reg_loss, total_loss \
+                    = self.sess.run([self.train_op, self.cls_loss, self.reg_loss, self.loss])  # , feed_dict={self.lr: lr}
                     
                     end = time.time()
 
@@ -447,7 +467,7 @@ class RetinaNet():
 
                 else:
                     # train a step
-                    _, global_step = self.sess.run([self.train_op, self.global_step], feed_dict={self.lr: lr})
+                    _ = self.sess.run(self.train_op)  # , feed_dict={self.lr: lr}
 
                 # save
                 if global_step % cfgs.save_inter == 0:
@@ -459,16 +479,9 @@ class RetinaNet():
                     self.summary_writer.add_summary(summary_str, global_step=global_step)
                     self.summary_writer.flush()
 
-                step += 1
-                mean_loss.append(total_loss)
-
             except tf.errors.OutOfRangeError:
                 print('Finish one epoch!')
                 break
-
-        sys.stdout.write('\n')
-        mean_loss = np.mean(mean_loss)
-        return mean_loss
 
     def _classification_subnet(self, featmap, filters):
         conv1 = common.bn_activation_conv(featmap, filters, 3, 1, is_training=self.is_training)
@@ -530,13 +543,14 @@ class RetinaNet():
         self.summary_writer = tf.summary.FileWriter(summary_path, graph=self.sess.graph)
 
     def _create_summary(self):
-        with tf.variable_scope('RETINA_LOSS'):
-            tf.summary.scalar('cls_loss', self.cls_loss)
-            tf.summary.scalar('reg_loss', self.reg_loss)
-
         with tf.variable_scope('LOSS'):
-            tf.summary.scalar('weight_decay_loss', self.weight_decay_loss)
             tf.summary.scalar('total_loss', self.loss)
+            tf.summary.scalar('pred_cls_loss', self.cls_loss)
+            tf.summary.scalar('pred_reg_loss', self.reg_loss)
+            tf.summary.scalar('weight_decay_loss', self.weight_decay_loss)
+
+        with tf.variable_scope('LR'):
+            tf.summary.scalar('learning_rate', self.lr)
 
         img_gt = draw_boxes_with_categories(self.images[0:1,...], 
                                             boxes=self.ground_truth[0, :, :-1],
