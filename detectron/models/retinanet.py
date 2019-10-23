@@ -83,8 +83,8 @@ class RetinaNet():
             p5 = self._get_pyramid(feat3, 256)
             p4, top_down = self._get_pyramid(feat2, 256, p5)
             p3, _ = self._get_pyramid(feat1, 256, top_down)  # biggest resolution
-            p6 = common.bn_activation_conv(p5, 256, 3, 2)
-            p7 = common.bn_activation_conv(p6, 256, 3, 2)
+            p6 = common.bn_activation_conv(p5, 256, 3, 2, is_training=self.is_training)
+            p7 = common.bn_activation_conv(p6, 256, 3, 2, is_training=self.is_training)
 
         with tf.variable_scope('subnets'):
             # cls and reg subnets: NxHxWxAxclass, NxHxWxAx4
@@ -471,29 +471,29 @@ class RetinaNet():
         return mean_loss
 
     def _classification_subnet(self, featmap, filters):
-        conv1 = common.bn_activation_conv(featmap, filters, 3, 1)
-        conv2 = common.bn_activation_conv(conv1, filters, 3, 1)
-        conv3 = common.bn_activation_conv(conv2, filters, 3, 1)
-        conv4 = common.bn_activation_conv(conv3, filters, 3, 1)
-        pred = common.bn_activation_conv(conv4, cfgs.num_anchors*cfgs.num_classes, 3, 1, pi_init=True)
+        conv1 = common.bn_activation_conv(featmap, filters, 3, 1, is_training=self.is_training)
+        conv2 = common.bn_activation_conv(conv1, filters, 3, 1, is_training=self.is_training)
+        conv3 = common.bn_activation_conv(conv2, filters, 3, 1, is_training=self.is_training)
+        conv4 = common.bn_activation_conv(conv3, filters, 3, 1, is_training=self.is_training)
+        pred = common.bn_activation_conv(conv4, cfgs.num_anchors*cfgs.num_classes, 3, 1, pi_init=True, is_training=self.is_training)
         return pred
 
     def _regression_subnet(self, featmap, filters):
-        conv1 = common.bn_activation_conv(featmap, filters, 3, 1)
-        conv2 = common.bn_activation_conv(conv1, filters, 3, 1)
-        conv3 = common.bn_activation_conv(conv2, filters, 3, 1)
-        conv4 = common.bn_activation_conv(conv3, filters, 3, 1)
-        pred = common.bn_activation_conv(conv4, cfgs.num_anchors*4, 3, 1)
+        conv1 = common.bn_activation_conv(featmap, filters, 3, 1, is_training=self.is_training)
+        conv2 = common.bn_activation_conv(conv1, filters, 3, 1, is_training=self.is_training)
+        conv3 = common.bn_activation_conv(conv2, filters, 3, 1, is_training=self.is_training)
+        conv4 = common.bn_activation_conv(conv3, filters, 3, 1, is_training=self.is_training)
+        pred = common.bn_activation_conv(conv4, cfgs.num_anchors*4, 3, 1, is_training=self.is_training)
         return pred
 
     def _get_pyramid(self, featmap, filters, top_feat=None):
         if top_feat is None:
-            return common.bn_activation_conv(featmap, filters, 3, 1)
+            return common.bn_activation_conv(featmap, filters, 3, 1, is_training=self.is_training)
 
         else:
             if cfgs.data_format == 'channels_last':
                 # squeeze channel to size 'filters'
-                feat = common.bn_activation_conv(featmap, filters, 1, 1)
+                feat = common.bn_activation_conv(featmap, filters, 1, 1, is_training=self.is_training)
 
                 # resize top feat
                 top_feat = tf.image.resize_bilinear(top_feat, [tf.shape(feat)[1], tf.shape(feat)[2]])
@@ -502,9 +502,9 @@ class RetinaNet():
                 total_feat = feat + top_feat
 
                 # get final pyra use total feat, and pass total feat to next
-                return common.bn_activation_conv(total_feat, filters, 3, 1), total_feat
+                return common.bn_activation_conv(total_feat, filters, 3, 1, is_training=self.is_training), total_feat
             else:
-                feat = common.bn_activation_conv(featmap, filters, 1, 1)
+                feat = common.bn_activation_conv(featmap, filters, 1, 1, is_training=self.is_training)
                 feat = tf.transpose(feat, [0, 2, 3, 1])  # NCHW->NHWC
 
                 top_feat = tf.transpose(top_feat, [0, 2, 3, 1])
@@ -513,7 +513,7 @@ class RetinaNet():
                 total_feat = feat + top_feat
                 total_feat = tf.transpose(total_feat, [0, 3, 1, 2])  # NHWC->NCHW
 
-                return common.bn_activation_conv(total_feat, filters, 3, 1), total_feat
+                return common.bn_activation_conv(total_feat, filters, 3, 1, is_training=self.is_training), total_feat
 
     def _create_saver(self):
         self.saver = tf.train.Saver(max_to_keep=5)
