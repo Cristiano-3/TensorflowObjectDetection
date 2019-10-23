@@ -4,11 +4,12 @@ import os
 root_path = os.path.abspath('../')
 summary_path = root_path + '/output/summaries'
 checkpoint_path = root_path + '/output/checkpoints/retina'
-
+num_train_samples = 7412
 epochs = 100
-lr = 1e-2
+lr = 1e-3
 batch_size = 2
 buffer_size = 100
+steps_per_epoch = num_train_samples/batch_size
 # ------- data pre-processing cfgs -------
 data_format = 'channels_last'
 pi = 0.01
@@ -23,7 +24,7 @@ gamma = 2.0
 weight_decay = 1e-4
 nms_score_threshold = 0.8
 nms_max_boxes = 20
-nms_iou_threshold = 0.45
+nms_iou_threshold = 0.3  # 0.45
 
 augment_config = {
     'data_format': 'channels_last',
