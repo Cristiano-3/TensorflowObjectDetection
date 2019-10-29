@@ -42,8 +42,26 @@ class RetinaNet():
         # init global variables
         self.sess.run(tf.global_variables_initializer())
 
-        # init data iterator
+        # restore
         if self.is_training:
+            restorer, ckpt_path = self._get_restorer('/output/checkpoints/')
+            if restorer is not None:
+                # restore weights
+                print('restore from: '+ckpt_path)
+                restorer.restore(self.sess, ckpt_path)
+                
+                print('restore step', self.sess.run(self.global_step))
+                print('restore lr', self.sess.run(self.lr))
+
+                # restore step & lr
+                global_step = int(ckpt_path.split("-")[-1])
+                self.current_epoch = int(global_step//cfgs.steps_per_epoch)
+                # lr = cfgs.lr * 0.96 ** (self.current_epoch//20)
+                
+            else:
+                self.current_epoch = 0
+
+            # init data iterator
             if self.train_initializer is not None:
                 self.sess.run(self.train_initializer)
         
@@ -341,7 +359,7 @@ class RetinaNet():
         neg_pconf = tf.boolean_mask(other_pconf, neg_agIoU_mask)
         neg_shape = tf.shape(neg_pconf)
         num_neg = neg_shape[0]
-        neg_class_id = tf.constant([cfgs.num_classes-1])
+        neg_class_id = tf.constant([cfgs.num_classes - 1])
         neg_label = tf.tile(neg_class_id, [num_neg])
 
         pos_pbbox_yx = tf.concat([best_pbbox_yx, pos_pbbox_yx], axis=0)
@@ -563,3 +581,18 @@ class RetinaNet():
         tf.summary.image('DETECT_CMP/final_detection', img_det)
         tf.summary.image('DETECT_CMP/ground_truth', img_gt)
         self.summary_op = tf.summary.merge_all()
+
+    def _get_restorer(self, ckpt_dir):
+        restorer = None
+        ckpt_path = tf.train.latest_checkpoint(ckpt_dir)
+
+        if ckpt_path is not None:
+            # if cfgs.restore_rpn:
+            #     # restore some vars
+            # else:
+            #     # restore all vars
+            restorer = tf.train.Saver()
+        else:
+            print('restore from pretrained-weights')
+
+        return restorer, ckpt_path
