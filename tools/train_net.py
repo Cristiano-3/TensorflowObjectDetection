@@ -28,7 +28,7 @@ def train(epochs):
     retinanet = RetinaNet('train', trainset)
 
     # start training
-    for i in range(epochs):
+    for i in range(retinanet.current_epoch, epochs):
         print("-"*25, "epoch", i, "-"*25)
 
         # train a epoch
