@@ -11,7 +11,7 @@ from detectron.utils.show_box_in_tensor import draw_boxes_with_categories_and_sc
 
 
 class RetinaNet():
-    def __init__(self, mode, trainset):
+    def __init__(self, mode, trainset=None):
         # check cfgs
         assert mode in ['train', 'test']
         assert cfgs.data_format in ['channels_first', 'channels_last']
@@ -44,7 +44,7 @@ class RetinaNet():
 
         # restore
         if self.is_training:
-            restorer, ckpt_path = self._get_restorer('/output/checkpoints/')
+            restorer, ckpt_path = self._get_restorer(cfgs.root_path+'/output/checkpoints/')
             if restorer is not None:
                 # restore weights
                 print('restore from: '+ckpt_path)
@@ -64,7 +64,10 @@ class RetinaNet():
             # init data iterator
             if self.train_initializer is not None:
                 self.sess.run(self.train_initializer)
-        
+        else:
+            ckpt_path = cfgs.root_path+'/output/checkpoints/retina-550000'
+            self.load_weight(ckpt_path)
+
     def _define_inputs(self):
         """
         shape/keep_aspect_ratio_resizer or fixed_shape_resizer
@@ -87,9 +90,10 @@ class RetinaNet():
         
         # test mode
         else:
-            self.images = tf.placeholder(tf.float32, shape, name='images')
+            self.images = tf.placeholder(tf.uint8, shape=shape, name='images')
+            self.images = tf.cast(self.images, tf.float32)
             self.images = self.images - mean
-            self.ground_truth = tf.placeholder(tf.float32, [None, None, 5], name='labels')
+            # self.ground_truth = tf.placeholder(tf.float32, [None, None, 5], name='labels')
 
     def _build_detection_architecture(self):
         with tf.variable_scope('feature_pyramid'):
@@ -500,6 +504,24 @@ class RetinaNet():
             except tf.errors.OutOfRangeError:
                 print('Finish one epoch!')
                 break
+
+    def load_weight(self, ckpt_path):
+        # var_list = tf.trainable_variables()
+        # g_list = tf.global_variables()
+        # bn_moving_vars = [g for g in g_list if 'moving_mean' in g.name]
+        # bn_moving_vars += [g for g in g_list if 'moving_variance' in g.name]
+        # var_list += bn_moving_vars
+        
+        restorer = tf.train.Saver() # var_list=var_list
+        restorer.restore(self.sess, ckpt_path)
+        print('load weights from:', ckpt_path)
+
+    def test_one_batch(self, img):
+        self.is_training = False
+        scores, boxes, labels = self.sess.run(self.detection_pred, feed_dict={self.images: img})
+        # v_list = [var.name for var in tf.global_variables() if "moving_variance" in var.name]
+        # print(v_list[-1], self.sess.run(self.sess.graph.get_tensor_by_name('subnets/batch_normalization_49/moving_variance:0')))
+        return scores, boxes, labels
 
     def _classification_subnet(self, featmap, filters):
         conv1 = common.bn_activation_conv(featmap, filters, 3, 1, is_training=self.is_training)

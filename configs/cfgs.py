@@ -7,7 +7,7 @@ checkpoint_path = root_path + '/output/checkpoints/retina'
 num_train_samples = 7412
 epochs = 100
 lr = 1e-3
-batch_size = 2
+batch_size = 1
 buffer_size = 100
 steps_per_epoch = num_train_samples/batch_size
 # ------- data pre-processing cfgs -------
@@ -43,3 +43,8 @@ augment_config = {
 show_inter = 20
 sumr_inter = 200
 save_inter = 10000
+
+vis_score = 0.1
+test_save_path = root_path+'/output/test_results'
+eval_save_path = root_path+'/output/eval_results'
+use_07_metric = True 

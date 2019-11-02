@@ -9,7 +9,7 @@ def _bn(inputs, is_training):
     bn = tf.layers.batch_normalization(
         inputs=inputs,
         axis=3 if cfgs.data_format == 'channels_last' else 1,
-        training=is_training
+        training=True#is_training
     )
     return bn
 
